@@ -38,10 +38,12 @@ export const calendarTools: RealtimeTool[] = [
   {
     type: "function",
     name: "get_events",
-    description: "Get upcoming calendar events from Google Calendar. Use when the user asks about their schedule or upcoming events. Each event has 'summary', 'date', and 'endTime' — read these directly. List ALL events. Optional maxResults (default 10).",
+    description: "Get calendar events from Google Calendar. Use when the user asks about their schedule or events on a specific day (like 'tomorrow' or 'next week'). ALWAYS specify timeMin and timeMax in ISO 8601 format with +06:00 offset (e.g. 2026-07-26T00:00:00+06:00) if the user asks for a specific timeframe. Optional maxResults.",
     parameters: {
       type: "object",
       properties: {
+        timeMin: { type: "string", description: "Start of the time range in ISO 8601 format with +06:00 offset." },
+        timeMax: { type: "string", description: "End of the time range in ISO 8601 format with +06:00 offset." },
         maxResults: { type: "number" },
       },
     },

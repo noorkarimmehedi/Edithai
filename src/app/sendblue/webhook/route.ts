@@ -1,5 +1,5 @@
 import { sendBlueMessage, sendBlueTypingIndicator } from "@/services/sendblue";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { Composio } from "@composio/core";
 import { calendarTools, gmailTools } from "@/services/realtime";
 
@@ -11,7 +11,14 @@ function getComposioAction(toolName: string, params: any) {
     case "manage_email": return { action: "GMAIL_ADD_LABEL_TO_EMAIL", mappedParams: params }; // Simplification
     case "send_email": return { action: params.action === "draft" ? "GMAIL_CREATE_EMAIL_DRAFT" : "GMAIL_SEND_EMAIL", mappedParams: params };
     
-    case "get_events": return { action: "GOOGLECALENDAR_EVENTS_LIST", mappedParams: { ...params, singleEvents: true } };
+    case "get_events": return { 
+      action: "GOOGLECALENDAR_EVENTS_LIST", 
+      mappedParams: { 
+        ...params, 
+        timeMin: params.timeMin || new Date().toISOString(),
+        singleEvents: true 
+      } 
+    };
     case "get_today_events": {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
@@ -41,7 +48,64 @@ export async function POST(req: Request) {
     console.log("Received Sendblue webhook:", body);
 
     const senderNumber = body.from_number || body.number;
-    const messageContent = body.content || body.text;
+    let messageContent = body.content || body.text || "";
+
+    // Handle voice notes via Whisper API
+    if (body.media_url) {
+      try {
+        console.log("Downloading media from:", body.media_url);
+        const openai = new OpenAI();
+        const mediaResponse = await fetch(body.media_url);
+        const arrayBuffer = await mediaResponse.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        
+        let fileToUpload;
+        
+        // iMessage sends voice notes as .caf which Whisper rejects. Convert to MP3 using ffmpeg.
+        if (body.media_url.includes('.caf') || body.media_url.includes('Audio')) {
+          console.log("Converting .caf to .mp3 using ffmpeg...");
+          const fs = require('fs');
+          const path = require('path');
+          const os = require('os');
+          const ffmpeg = require('fluent-ffmpeg');
+          const ffmpegPath = require('ffmpeg-static');
+          ffmpeg.setFfmpegPath(ffmpegPath);
+          
+          const tempInput = path.join(os.tmpdir(), `input-${Date.now()}.caf`);
+          const tempOutput = path.join(os.tmpdir(), `output-${Date.now()}.mp3`);
+          fs.writeFileSync(tempInput, buffer);
+          
+          await new Promise((resolve, reject) => {
+            ffmpeg(tempInput)
+              .audioChannels(1)
+              .audioBitrate('32k')
+              .toFormat('mp3')
+              .on('end', resolve)
+              .on('error', reject)
+              .save(tempOutput);
+          });
+          
+          const outputBuffer = fs.readFileSync(tempOutput);
+          fileToUpload = await toFile(outputBuffer, 'audio.mp3');
+          
+          fs.unlinkSync(tempInput);
+          fs.unlinkSync(tempOutput);
+        } else {
+          fileToUpload = await toFile(buffer, 'audio.m4a');
+        }
+        
+        console.log("Transcribing audio with Whisper...");
+        const transcription = await openai.audio.transcriptions.create({
+          file: fileToUpload,
+          model: 'whisper-1',
+        });
+        
+        messageContent = transcription.text;
+        console.log("Transcription successful:", messageContent);
+      } catch (err) {
+        console.error("Failed to transcribe audio:", err);
+      }
+    }
 
     if (!senderNumber || !messageContent) {
       return Response.json({ success: true, note: "Ignored invalid payload" });
@@ -70,7 +134,7 @@ export async function POST(req: Request) {
             5. IMPORTANT: To edit or delete an event, you MUST ALWAYS call search_events first to find the exact eventId. Never guess or hallucinate the eventId.
             6. PERMISSION REQUIREMENT: If the user asks you to create, update, delete, send, or modify anything (like creating/moving an event or sending an email), you MUST NOT call the tool immediately. Instead, first reply to the user with a summary of the action you are about to take (e.g. 'I will create a meeting with Abir on July 26 from 4PM to 5PM. Shall I proceed?'). Wait for the user to explicitly say 'yes' or approve before you actually call the tool. For safe read-only actions (like searching events), you may call tools without asking.
             7. EXECUTION UPDATES: When you finally have permission and decide to call a tool, you MUST include a short plain text message in your response content (e.g. 'Executing: Creating your event...' or 'Checking your calendar...'). This will be sent to the user immediately so they know you are working on it.
-            8. MEMORY & IDs: Because your memory relies on your past responses, when summarizing emails or events, ALWAYS include the exact email address or event ID in your response (e.g. naturally in the text or silently at the end like '[Email: example@gmail.com]'). If you need to send an email and don't know the address, use the search_emails tool first to find it.
+            8. MEMORY & IDs: Because your memory relies on your past responses, you MUST securely memorize exact email addresses and Event IDs for later use. To do this without cluttering the user's text message, wrap all technical IDs at the very end of your response inside a hidden block like this: [HIDDEN: Email: example@gmail.com, EventID: 12345]. This block will be saved to your memory but hidden from the user.
             
             You have access to Gmail and Google Calendar tools. If the user asks you to check email or schedule something, DO IT using your tools.`
           }
@@ -138,6 +202,8 @@ export async function POST(req: Request) {
             } catch(err) {
               console.error("Failed to save interim message:", err);
             }
+            // Trigger typing indicator again while the tool executes
+            sendBlueTypingIndicator(senderNumber).catch(console.error);
           }
 
           messages.push(message);
@@ -215,16 +281,20 @@ export async function POST(req: Request) {
         }
 
         const finalReplyText = message.content || "Done!";
-        console.log("Sending reply back via Sendblue:", finalReplyText);
+        console.log("Original AI Reply:", finalReplyText);
         
-        // Save the AI's response to Convex
+        // Strip out hidden memory tags before sending to the user
+        const userFacingText = finalReplyText.replace(/\[HIDDEN:[\s\S]*?\]/gi, "").trim();
+        console.log("Sending reply back via Sendblue:", userFacingText);
+        
+        // Save the FULL AI's response (including hidden IDs) to Convex
         try {
           await convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "assistant", content: finalReplyText });
         } catch(err) {
           console.error("Failed to save assistant message to Convex:", err);
         }
 
-        await sendBlueMessage(senderNumber, finalReplyText);
+        await sendBlueMessage(senderNumber, userFacingText);
       } catch (err) {
         console.error("Background processing error:", err);
       }
