@@ -315,15 +315,14 @@ export async function POST(req: Request) {
       }
     };
 
-    // Spawn the background process asynchronously on the next tick
-    // This forces Node.js to immediately flush the 200 OK HTTP response
-    // back to Ngrok/Sendblue before we start doing heavy OpenAI/Convex work.
-    setTimeout(() => {
-      processMessageInBackground();
-    }, 50);
+    // Await the background process. 
+    // In local Node.js we could use setTimeout, but Vercel Serverless Functions 
+    // freeze immediately when a response is returned, killing any un-awaited promises!
+    // Since we optimized the code to be fully parallel, this is now fast enough 
+    // to finish within standard webhook timeout windows.
+    await processMessageInBackground();
 
-    // Immediately return success so Sendblue doesn't retry or hang
-    return Response.json({ success: true, note: "Processing in background" });
+    return Response.json({ success: true, note: "Processing complete" });
   } catch (error) {
     console.error("Webhook payload error:", error);
     return Response.json({ success: false, error: "Internal Server Error" }, { status: 500 });
