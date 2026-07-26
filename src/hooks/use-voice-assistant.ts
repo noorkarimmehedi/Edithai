@@ -25,6 +25,7 @@ export function useVoiceAssistant() {
   const reconnectAttempts = useRef(0)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intentionalStop = useRef(false)
+  const pendingToolCalls = useRef(0)
 
 
 
@@ -234,13 +235,54 @@ export function useVoiceAssistant() {
               break
             case "response.function_call_arguments.done": {
               setState("thinking")
+              pendingToolCalls.current += 1
               const args = JSON.parse(msg.arguments)
               const result = await handleToolCall(msg.name, args)
-              dc.send(JSON.stringify({
-                type: "conversation.item.create",
-                item: { type: "function_call_output", output: JSON.stringify(result), call_id: msg.call_id },
-              }))
-              dc.send(JSON.stringify({ type: "response.create" }))
+              
+              if (dataChannelRef.current?.readyState === "open") {
+                const sendOutput = (outputStr: string) => {
+                  if (outputStr.length > 16000) {
+                    console.warn(`Payload too large (${outputStr.length} chars). Preemptively truncating to avoid WebRTC crash...`)
+                    outputStr = JSON.stringify({
+                      success: false,
+                      error: "The requested data was too large for the voice connection.",
+                      preview: outputStr.substring(0, 1000) + "..."
+                    })
+                  }
+                  
+                  try {
+                    dataChannelRef.current?.send(JSON.stringify({
+                      type: "conversation.item.create",
+                      item: { type: "function_call_output", output: outputStr, call_id: msg.call_id },
+                    }))
+                    
+                    pendingToolCalls.current -= 1
+                    if (pendingToolCalls.current <= 0) {
+                      pendingToolCalls.current = 0
+                      dataChannelRef.current?.send(JSON.stringify({ type: "response.create" }))
+                    }
+                  } catch (e) {
+                    console.error("Failed to send tool output:", e)
+                    if (outputStr.length > 500) {
+                      console.warn("Payload too large, truncating and resending as valid JSON...")
+                      pendingToolCalls.current += 1 // offset the decrement we're about to do
+                      
+                      const safeOutput = JSON.stringify({
+                        success: false,
+                        error: "The requested data was too large for the voice connection.",
+                        preview: outputStr.substring(0, 500) + "..."
+                      })
+                      
+                      sendOutput(safeOutput)
+                    } else {
+                      pendingToolCalls.current -= 1
+                    }
+                  }
+                }
+                sendOutput(JSON.stringify(result))
+              } else {
+                pendingToolCalls.current -= 1
+              }
               break
             }
             case "input_audio_buffer.speech_started":
@@ -400,20 +442,60 @@ export function useVoiceAssistant() {
           }
           case "response.function_call_arguments.done": {
             setState("thinking")
+            pendingToolCalls.current += 1
             const args = JSON.parse(msg.arguments)
             const result = await handleToolCall(msg.name, args)
 
-            dc.send(
-              JSON.stringify({
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  output: JSON.stringify(result),
-                  call_id: msg.call_id,
-                },
-              })
-            )
-            dc.send(JSON.stringify({ type: "response.create" }))
+            if (dataChannelRef.current?.readyState === "open") {
+              const sendOutput = (outputStr: string) => {
+                if (outputStr.length > 16000) {
+                  console.warn(`Payload too large (${outputStr.length} chars). Preemptively truncating to avoid WebRTC crash...`)
+                  outputStr = JSON.stringify({
+                    success: false,
+                    error: "The requested data was too large for the voice connection.",
+                    preview: outputStr.substring(0, 1000) + "..."
+                  })
+                }
+                
+                try {
+                  dataChannelRef.current?.send(
+                    JSON.stringify({
+                      type: "conversation.item.create",
+                      item: {
+                        type: "function_call_output",
+                        output: outputStr,
+                        call_id: msg.call_id,
+                      },
+                    })
+                  )
+                  
+                  pendingToolCalls.current -= 1
+                  if (pendingToolCalls.current <= 0) {
+                    pendingToolCalls.current = 0
+                    dataChannelRef.current?.send(JSON.stringify({ type: "response.create" }))
+                  }
+                } catch (e) {
+                  console.error("Failed to send tool output:", e)
+                  if (outputStr.length > 500) {
+                    console.warn("Payload too large, truncating and resending as valid JSON...")
+                    pendingToolCalls.current += 1
+                    
+                    const safeOutput = JSON.stringify({
+                      success: false,
+                      error: "The requested data was too large for the voice connection.",
+                      preview: outputStr.substring(0, 500) + "..."
+                    })
+                    
+                    sendOutput(safeOutput)
+                  } else {
+                    pendingToolCalls.current -= 1
+                  }
+                }
+              }
+              sendOutput(JSON.stringify(result))
+            } else {
+              pendingToolCalls.current -= 1
+            }
             break
           }
           case "input_audio_buffer.speech_started": {

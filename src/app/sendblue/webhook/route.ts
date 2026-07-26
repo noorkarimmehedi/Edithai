@@ -145,25 +145,31 @@ export async function POST(req: Request) {
         const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL || "");
         const { api } = require("../../../../convex/_generated/api");
         
-        // Save the incoming user message to Convex
-        try {
-          await convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "user", content: messageContent });
-        } catch(err) {
-          console.error("Failed to save user message to Convex:", err);
-        }
+        // Run Convex tasks concurrently: add message, fetch history, and get connection ID
+        let history: any[] = [];
+        let dynamicConnectionId: string | null = null;
         
-        // Fetch chat history from Convex
         try {
-          const history = await convex.query(api.users.getMessages, { phoneNumber: senderNumber });
-          if (history && history.length > 0) {
-            for (const msg of history) {
-              messages.push({ role: msg.role, content: msg.content });
-            }
-          } else {
+          const [historyResult, connectionResult] = await Promise.all([
+            convex.query(api.users.getMessages, { phoneNumber: senderNumber }),
+            convex.query(api.users.getConnectionId, { phoneNumber: senderNumber }).catch(() => null),
+            convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "user", content: messageContent })
+          ]);
+          history = historyResult;
+          dynamicConnectionId = connectionResult;
+        } catch (err) {
+          console.error("Failed to fetch initial Convex data:", err);
+        }
+
+        if (history && history.length > 0) {
+          for (const msg of history) {
+            messages.push({ role: msg.role, content: msg.content });
+          }
+          // The newly added message might not be in the immediate query return due to DB latency
+          if (messages[messages.length - 1].content !== messageContent) {
             messages.push({ role: "user", content: messageContent });
           }
-        } catch (err) {
-          console.error("Failed to fetch chat history:", err);
+        } else {
           messages.push({ role: "user", content: messageContent });
         }
 
@@ -210,65 +216,77 @@ export async function POST(req: Request) {
           
           const composio = new Composio({ apiKey });
           
-          let dynamicConnectionId: string | null = null;
+          // Pre-fetch active Composio accounts to avoid repeated lookups (run concurrently)
+          let gmailAccountId: string | null = null;
+          let calendarAccountId: string | null = null;
           try {
-            dynamicConnectionId = await convex.query(api.users.getConnectionId, { phoneNumber: senderNumber });
-            console.log(`Found Composio connection ID for ${senderNumber}: ${dynamicConnectionId}`);
-          } catch (err) {
-            console.error("Failed to query Convex for connection ID:", err);
-          }
-          
-          for (const toolCall of message.tool_calls) {
-            let resultData = { success: false, error: "Action not mapped" };
+            const [gmailAccounts, calAccounts] = await Promise.all([
+              composio.connectedAccounts.list({ userIds: ["voicemail-user"], toolkitSlugs: ["gmail"], statuses: ["ACTIVE"] }).catch(() => ({ items: [] })),
+              composio.connectedAccounts.list({ userIds: ["voicemail-user"], toolkitSlugs: ["googlecalendar"], statuses: ["ACTIVE"] }).catch(() => ({ items: [] }))
+            ]);
             
-            try {
-              const params = JSON.parse(toolCall.function.arguments || "{}");
-              const mapping = getComposioAction(toolCall.function.name, params);
+            if (gmailAccounts.items && gmailAccounts.items.length > 0) {
+              gmailAccountId = gmailAccounts.items[0].id;
+            }
+            if (calAccounts.items && calAccounts.items.length > 0) {
+              calendarAccountId = calAccounts.items[0].id;
+            }
+          } catch(err) {
+            console.error("Failed to pre-fetch Composio accounts:", err);
+          }
+
+          // Execute all tool calls concurrently
+          const toolResults = await Promise.all(
+            message.tool_calls.map(async (toolCall: any) => {
+              let resultData = { success: false, error: "Action not mapped" };
               
-              if (mapping) {
-                console.log(`Executing Composio Action: ${mapping.action}`);
-                try {
-                  const toolkit = mapping.action.startsWith("GMAIL") ? "gmail" : "googlecalendar";
-                  const accounts = await composio.connectedAccounts.list({
-                    userIds: ["voicemail-user"],
-                    toolkitSlugs: [toolkit],
-                    statuses: ["ACTIVE"],
-                  });
-                  
-                  const toolkitConnectionId = accounts.items.length > 0 ? accounts.items[0].id : null;
-                  if (!toolkitConnectionId) {
-                    throw new Error(`No active ${toolkit} connection found on Composio for this user.`);
-                  }
-                  
-                  const actionRes = await composio.tools.execute(mapping.action, {
-                    connectedAccountId: toolkitConnectionId,
-                    arguments: mapping.mappedParams,
-                    userId: "voicemail-user",
-                    dangerouslySkipVersionCheck: true,
-                  });
-                  resultData = actionRes as any;
-                } catch (apiError: any) {
-                  console.log("Composio API error, falling back to mock data...");
-                  if (mapping.action === "GMAIL_FETCH_EMAILS") {
-                    resultData = { emails: [{ id: "mock-1", subject: "Welcome to Voicemail AI", from: "team@voicemail-ai.com", snippet: "Thank you..." }], count: 1 } as any;
-                  } else if (mapping.action.startsWith("GOOGLECALENDAR")) {
-                    resultData = { success: true, items: [{ summary: "Mock Calendar Event", date: new Date().toISOString() }] } as any;
-                  } else {
-                    resultData = { success: true, mock: true, note: "Executed mock action" } as any;
+              try {
+                const params = JSON.parse(toolCall.function.arguments || "{}");
+                const mapping = getComposioAction(toolCall.function.name, params);
+                
+                if (mapping) {
+                  console.log(`Executing Composio Action: ${mapping.action}`);
+                  try {
+                    const isGmail = mapping.action.startsWith("GMAIL");
+                    const toolkitConnectionId = isGmail ? gmailAccountId : calendarAccountId;
+                    
+                    if (!toolkitConnectionId) {
+                      throw new Error(`No active connection found on Composio for this tool.`);
+                    }
+                    
+                    const actionRes = await composio.tools.execute(mapping.action, {
+                      connectedAccountId: toolkitConnectionId,
+                      arguments: mapping.mappedParams,
+                      userId: "voicemail-user",
+                      dangerouslySkipVersionCheck: true,
+                    });
+                    resultData = actionRes as any;
+                  } catch (apiError: any) {
+                    console.log("Composio API error, falling back to mock data...");
+                    if (mapping.action === "GMAIL_FETCH_EMAILS") {
+                      resultData = { emails: [{ id: "mock-1", subject: "Welcome to Voicemail AI", from: "team@voicemail-ai.com", snippet: "Thank you..." }], count: 1 } as any;
+                    } else if (mapping.action.startsWith("GOOGLECALENDAR")) {
+                      resultData = { success: true, items: [{ summary: "Mock Calendar Event", date: new Date().toISOString() }] } as any;
+                    } else {
+                      resultData = { success: true, mock: true, note: "Executed mock action" } as any;
+                    }
                   }
                 }
+              } catch (err: any) {
+                resultData = { success: false, error: err.message };
               }
-            } catch (err: any) {
-              resultData = { success: false, error: err.message };
-            }
-            
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              name: toolCall.function.name,
-              content: JSON.stringify(resultData),
-            });
-          }
+              
+              return {
+                role: "tool",
+                tool_call_id: toolCall.id,
+                name: toolCall.function.name,
+                content: JSON.stringify(resultData),
+              };
+            })
+          );
+
+          // Append all concurrent tool results to messages
+          messages.push(...toolResults);
 
           // Feed results back to OpenAI to see if it wants to call more tools or finalize
           response = await openai.chat.completions.create({
@@ -284,26 +302,27 @@ export async function POST(req: Request) {
         console.log("Original AI Reply:", finalReplyText);
         
         // Strip out hidden memory tags before sending to the user
+        // Fire and forget non-blocking tasks concurrently
         const userFacingText = finalReplyText.replace(/\[HIDDEN:[\s\S]*?\]/gi, "").trim();
         console.log("Sending reply back via Sendblue:", userFacingText);
         
-        // Save the FULL AI's response (including hidden IDs) to Convex
-        try {
-          await convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "assistant", content: finalReplyText });
-        } catch(err) {
-          console.error("Failed to save assistant message to Convex:", err);
-        }
-
-        await sendBlueMessage(senderNumber, userFacingText);
+        Promise.all([
+          convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "assistant", content: finalReplyText }).catch(err => console.error("Convex error:", err)),
+          sendBlueMessage(senderNumber, userFacingText).catch(err => console.error("Sendblue error:", err))
+        ]);
       } catch (err) {
         console.error("Background processing error:", err);
       }
     };
 
-    // Spawn the background process without awaiting it
-    processMessageInBackground();
+    // Spawn the background process asynchronously on the next tick
+    // This forces Node.js to immediately flush the 200 OK HTTP response
+    // back to Ngrok/Sendblue before we start doing heavy OpenAI/Convex work.
+    setTimeout(() => {
+      processMessageInBackground();
+    }, 50);
 
-    // Immediately return success so Sendblue doesn't retry
+    // Immediately return success so Sendblue doesn't retry or hang
     return Response.json({ success: true, note: "Processing in background" });
   } catch (error) {
     console.error("Webhook payload error:", error);
