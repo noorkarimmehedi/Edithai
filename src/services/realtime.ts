@@ -120,7 +120,7 @@ export const gmailTools: RealtimeTool[] = [
   {
     type: "function",
     name: "get_emails",
-    description: "Get latest emails. Optional maxResults (default 10).",
+    description: "Get the latest emails from Gmail. Use for general 'what's in my inbox' questions. Optional maxResults (default 10) — pass a higher value (e.g. 25) when the user wants a thorough review of many emails. For filtered requests (unread emails, emails from the last N hours/days, from a specific sender), use search_emails instead.",
     parameters: {
       type: "object",
       properties: {
@@ -131,7 +131,7 @@ export const gmailTools: RealtimeTool[] = [
   {
     type: "function",
     name: "search_emails",
-    description: "Search inbox by query.",
+    description: "Search Gmail using Gmail query syntax. Supported filters: is:unread, is:read, newer_than:1d (last 24 hours), newer_than:6h, after:YYYY/MM/DD, before:YYYY/MM/DD, from:email, subject:text, in:inbox. Examples: 'is:unread newer_than:1d', 'is:unread after:2026/08/01', 'from:alice@company.com'. Use this for ANY request about unread emails, recent emails (last N hours/days), or filtered email reviews. Read ALL emails returned before answering; do not summarize only the newest few unless they are the only matches.",
     parameters: {
       type: "object",
       properties: {

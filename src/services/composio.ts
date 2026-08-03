@@ -8,6 +8,58 @@ function getEnvConfig(): GmailConfig | null {
   return { apiKey }
 }
 
+function matchesMockQuery(email: Email, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  const terms = q.split(/\s+/)
+  let isUnread: boolean | null = null
+  let isRead: boolean | null = null
+  let newerThanMs: number | null = null
+  let afterDate: number | null = null
+  let beforeDate: number | null = null
+  const fromTerms: string[] = []
+  const subjectTerms: string[] = []
+  const textTerms: string[] = []
+
+  for (const term of terms) {
+    if (term === "is:unread") { isUnread = true; continue }
+    if (term === "is:read") { isRead = true; continue }
+    const newerMatch = term.match(/^newer_than:(\d+)(h|d)$/)
+    if (newerMatch) {
+      const n = parseInt(newerMatch[1], 10)
+      newerThanMs = newerMatch[2] === "h" ? n * 3600_000 : n * 86400_000
+      continue
+    }
+    const afterMatch = term.match(/^after:(\d{4}\/\d{2}\/\d{2})$/)
+    if (afterMatch) {
+      afterDate = Date.parse(afterMatch[1] + "T00:00:00Z")
+      continue
+    }
+    const beforeMatch = term.match(/^before:(\d{4}\/\d{2}\/\d{2})$/)
+    if (beforeMatch) {
+      beforeDate = Date.parse(beforeMatch[1] + "T00:00:00Z")
+      continue
+    }
+    if (term.startsWith("from:")) { fromTerms.push(term.slice(5)); continue }
+    if (term.startsWith("subject:")) { subjectTerms.push(term.slice(8)); continue }
+    if (term.startsWith("in:") || term.startsWith("to:") || term.startsWith("label:")) continue
+    if (term) textTerms.push(term)
+  }
+
+  const time = Date.parse(email.date)
+
+  if (isUnread === true && email.isRead) return false
+  if (isUnread === false && !email.isRead) return false
+  if (isRead === true && !email.isRead) return false
+  if (newerThanMs !== null && (Number.isNaN(time) || time < Date.now() - newerThanMs)) return false
+  if (afterDate !== null && (Number.isNaN(time) || time < afterDate)) return false
+  if (beforeDate !== null && (Number.isNaN(time) || time > beforeDate)) return false
+  if (fromTerms.length > 0 && !fromTerms.some((f) => email.from.toLowerCase().includes(f))) return false
+  if (subjectTerms.length > 0 && !subjectTerms.some((s) => email.subject.toLowerCase().includes(s))) return false
+
+  const haystack = `${email.subject} ${email.from} ${email.body} ${email.snippet}`.toLowerCase()
+  return textTerms.every((t) => haystack.includes(t))
+}
+
 class GmailIntegration {
   configure(c: GmailConfig) {
     config = c
@@ -114,12 +166,7 @@ class GmailIntegration {
         const maxResults = (params.max_results as number) || 10
         const query = params.query as string | undefined
         if (query) {
-          return mockEmails.filter(
-            (e) =>
-              e.subject.toLowerCase().includes(query.toLowerCase()) ||
-              e.from.toLowerCase().includes(query.toLowerCase()) ||
-              e.body.toLowerCase().includes(query.toLowerCase())
-          )
+          return mockEmails.filter((e) => matchesMockQuery(e, query))
         }
         return mockEmails.slice(0, maxResults)
       }
@@ -315,7 +362,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Hi team,\n\nAttached is the Q4 financial report. Revenue is up 23% compared to last year. Key highlights include strong performance in the APAC region and new product launches.\n\nBest,\nSarah",
     snippet: "Attached is the Q4 financial report. Revenue is up 23%...",
-    date: "2026-07-23T09:15:00Z",
+    date: new Date(Date.now() - 2 * 3600_000).toISOString(),
     isRead: false,
     isStarred: true,
     labels: ["INBOX", "IMPORTANT"],
@@ -328,7 +375,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Your invoice for June 2026 is now available.\n\nAmount: $299.00\nDue Date: July 15, 2026\n\nView and pay your invoice at https://stripe.com/invoices/xyz\n\nThank you for your business.",
     snippet: "Your invoice for June 2026 is now available. Amount: $299.00...",
-    date: "2026-07-20T14:30:00Z",
+    date: new Date(Date.now() - 6 * 3600_000).toISOString(),
     isRead: true,
     isStarred: false,
     labels: ["INBOX"],
@@ -341,7 +388,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Top stories this week:\n\n1. AI Breakthroughs in Healthcare\n2. New Framework Releases\n3. Industry Conference Updates\n\nRead more on our website.",
     snippet: "Top stories this week: 1. AI Breakthroughs in Healthcare...",
-    date: "2026-07-22T08:00:00Z",
+    date: new Date(Date.now() - 9 * 3600_000).toISOString(),
     isRead: false,
     isStarred: false,
     labels: ["INBOX"],
@@ -354,7 +401,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Thanks for the update. The timeline looks good. Let's aim for the August 15th launch date. I'll coordinate with the design team on the remaining UI elements.\n\nMike",
     snippet: "Thanks for the update. The timeline looks good...",
-    date: "2026-07-21T16:45:00Z",
+    date: new Date(Date.now() - 26 * 3600_000).toISOString(),
     isRead: true,
     isStarred: false,
     labels: ["INBOX"],
@@ -367,7 +414,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Please update your password before July 30th as part of our quarterly security review. Use the company portal to set a new password.\n\nIT Security Team",
     snippet: "Please update your password before July 30th...",
-    date: "2026-07-19T10:00:00Z",
+    date: new Date(Date.now() - 30 * 3600_000).toISOString(),
     isRead: false,
     isStarred: false,
     labels: ["INBOX", "IMPORTANT"],
@@ -380,7 +427,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Your package has shipped!\n\nItems: Wireless Headphones\nDelivery Date: July 25\nTracking: 1Z999AA10123456784\n\nTrack your package: https://amazon.com/tracking",
     snippet: "Your package has shipped! Items: Wireless Headphones...",
-    date: "2026-07-22T20:15:00Z",
+    date: new Date(Date.now() - 40 * 3600_000).toISOString(),
     isRead: true,
     isStarred: false,
     labels: ["INBOX"],
@@ -393,7 +440,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Hey everyone,\n\nLet's do team lunch tomorrow at 12:30pm. I've booked a table at Olive Garden downtown. Let me know if you have any dietary restrictions.\n\nEmma",
     snippet: "Let's do team lunch tomorrow at 12:30pm...",
-    date: "2026-07-22T11:30:00Z",
+    date: new Date(Date.now() - 48 * 3600_000).toISOString(),
     isRead: false,
     isStarred: false,
     labels: ["INBOX"],
@@ -406,7 +453,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "You're invited to join us for a live demo of our new platform.\n\nDate: July 28, 2026\nTime: 2:00 PM EST\n\nRegister here: https://partner-company.com/demo\n\nBest,\nAlex",
     snippet: "You're invited to join us for a live demo...",
-    date: "2026-07-18T15:00:00Z",
+    date: new Date(Date.now() - 72 * 3600_000).toISOString(),
     isRead: true,
     isStarred: true,
     labels: ["INBOX"],
@@ -419,7 +466,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Standup Notes:\n- Yesterday: Completed API integration, fixed login bug\n- Today: Starting on dashboard UI, code review pending\n- Blockers: Waiting for design mockups",
     snippet: "Standup Notes: - Yesterday: Completed API integration...",
-    date: "2026-07-22T09:00:00Z",
+    date: new Date(Date.now() - 96 * 3600_000).toISOString(),
     isRead: false,
     isStarred: false,
     labels: ["INBOX"],
@@ -432,7 +479,7 @@ const mockEmails: Email[] = [
     to: "user@example.com",
     body: "Your vacation request for August 10-14 has been approved.\n\nRemaining PTO days: 12\n\nEnjoy your time off!",
     snippet: "Your vacation request for August 10-14 has been approved...",
-    date: "2026-07-17T13:00:00Z",
+    date: new Date(Date.now() - 120 * 3600_000).toISOString(),
     isRead: true,
     isStarred: false,
     labels: ["INBOX"],
