@@ -69,11 +69,11 @@ export function useVoiceAssistant() {
 
         switch (toolName) {
           case "get_emails": {
-            result = await gmail.getEmails(args.maxResults as number)
+            result = await gmail.getEmails(args.maxResults as number, args.pageToken as string)
             break
           }
           case "search_emails": {
-            result = await gmail.searchEmails(args.query as string)
+            result = await gmail.searchEmails(args.query as string, args.pageToken as string)
             break
           }
           case "manage_email": {

@@ -120,22 +120,24 @@ export const gmailTools: RealtimeTool[] = [
   {
     type: "function",
     name: "get_emails",
-    description: "Get the latest emails from Gmail. Use for general 'what's in my inbox' questions. Optional maxResults (default 10) — pass a higher value (e.g. 25) when the user wants a thorough review of many emails. For filtered requests (unread emails, emails from the last N hours/days, from a specific sender), use search_emails instead.",
+    description: "Get the latest emails from Gmail. Use for general 'what's in my inbox' questions. Optional maxResults (default 10) — pass a higher value (e.g. 25) when the user wants a thorough review of many emails. For filtered requests (unread emails, emails from the last N hours/days, from a specific sender), use search_emails instead. If the result includes a nextPageToken and you need more emails, call again with that pageToken.",
     parameters: {
       type: "object",
       properties: {
         maxResults: { type: "number" },
+        pageToken: { type: "string", description: "Opaque token to fetch the next page of results. Pass the nextPageToken returned by the previous call." },
       },
     },
   },
   {
     type: "function",
     name: "search_emails",
-    description: "Search Gmail using Gmail query syntax. Supported filters: is:unread, is:read, newer_than:1d (last 24 hours), newer_than:6h, after:YYYY/MM/DD, before:YYYY/MM/DD, from:email, subject:text, in:inbox. Examples: 'is:unread newer_than:1d', 'is:unread after:2026/08/01', 'from:alice@company.com'. Use this for ANY request about unread emails, recent emails (last N hours/days), or filtered email reviews. Read ALL emails returned before answering; do not summarize only the newest few unless they are the only matches.",
+    description: "Search Gmail using Gmail query syntax. Supported filters: is:unread, is:read, newer_than:1d (last 24 hours), newer_than:6h, after:YYYY/MM/DD, before:YYYY/MM/DD, from:email, subject:text, in:inbox. Examples: 'is:unread newer_than:1d', 'is:unread after:2026/08/01', 'from:alice@company.com'. Use this for ANY request about unread emails, recent emails (last N hours/days), or filtered email reviews. Read ALL emails returned before answering; do not summarize only the newest few unless they are the only matches. If the result includes a nextPageToken and there may be more matching emails, call again with that pageToken and keep reading until there are no more pages.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string" },
+        pageToken: { type: "string", description: "Opaque token to fetch the next page of results. Pass the nextPageToken returned by the previous call." },
       },
       required: ["query"],
     },

@@ -51,6 +51,22 @@ function compactEmails(raw: unknown): Record<string, unknown>[] {
   })
 }
 
+function getNextPageToken(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const obj = raw as Record<string, unknown>
+  const data = obj.data && typeof obj.data === "object" ? (obj.data as Record<string, unknown>) : undefined
+  const token = data?.nextPageToken ?? obj.nextPageToken
+  return typeof token === "string" && token ? token : undefined
+}
+
+function getTotalEstimate(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const obj = raw as Record<string, unknown>
+  const data = obj.data && typeof obj.data === "object" ? (obj.data as Record<string, unknown>) : undefined
+  const total = data?.resultSizeEstimate ?? obj.resultSizeEstimate
+  return typeof total === "number" ? total : undefined
+}
+
 async function fetchEmails(args: Record<string, unknown>): Promise<ToolResult> {
   try {
     const raw = await gmailIntegration.executeAction("GMAIL_FETCH_EMAILS", {
@@ -58,15 +74,25 @@ async function fetchEmails(args: Record<string, unknown>): Promise<ToolResult> {
       ...args,
     })
     const emails = compactEmails(raw)
-    return { success: true, data: { emails, count: emails.length } }
+    const nextPageToken = getNextPageToken(raw)
+    const total = getTotalEstimate(raw)
+    return {
+      success: true,
+      data: {
+        emails,
+        count: emails.length,
+        ...(nextPageToken ? { nextPageToken } : {}),
+        ...(typeof total === "number" ? { total } : {}),
+      },
+    }
   } catch (error) {
     return { success: false, error: String(error) }
   }
 }
 
 export class GmailService {
-  async getEmails(maxResults = 10): Promise<ToolResult> {
-    return fetchEmails({ max_results: maxResults })
+  async getEmails(maxResults = 10, pageToken?: string): Promise<ToolResult> {
+    return fetchEmails({ max_results: maxResults, ...(pageToken ? { page_token: pageToken } : {}) })
   }
 
   async getEmail(messageId: string): Promise<ToolResult> {
@@ -80,8 +106,8 @@ export class GmailService {
     }
   }
 
-  async searchEmails(query: string): Promise<ToolResult> {
-    return fetchEmails({ query, max_results: MAX_EMAILS })
+  async searchEmails(query: string, pageToken?: string): Promise<ToolResult> {
+    return fetchEmails({ query, max_results: MAX_EMAILS, ...(pageToken ? { page_token: pageToken } : {}) })
   }
 
   async sendEmail(to: string, subject: string, body: string): Promise<ToolResult> {
