@@ -47,9 +47,8 @@ function matchesMockQuery(email: Email, query: string): boolean {
 
   const time = Date.parse(email.date)
 
-  if (isUnread === true && email.isRead) return false
-  if (isUnread === false && !email.isRead) return false
-  if (isRead === true && !email.isRead) return false
+  if (isUnread !== null && email.isRead) return false
+  if (isRead !== null && !email.isRead) return false
   if (newerThanMs !== null && (Number.isNaN(time) || time < Date.now() - newerThanMs)) return false
   if (afterDate !== null && (Number.isNaN(time) || time < afterDate)) return false
   if (beforeDate !== null && (Number.isNaN(time) || time > beforeDate)) return false
