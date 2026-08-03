@@ -2,6 +2,7 @@ import { sendBlueMessage, sendBlueTypingIndicator } from "@/services/sendblue";
 import OpenAI, { toFile } from "openai";
 import { Composio } from "@composio/core";
 import { calendarTools, gmailTools } from "@/services/realtime";
+import { buildSearchFallbacks } from "@/services/gmail-query";
 
 // Map our local tool names to Composio action names
 function getComposioAction(toolName: string, params: any) {
@@ -133,8 +134,9 @@ export async function POST(req: Request) {
             4. For Calendar Events, ALWAYS format startDateTime and endDateTime with the explicit +06:00 offset for Bangladesh time (e.g., 2026-07-26T16:00:00+06:00). NEVER use 'Z' or calculate UTC math yourself.
             5. IMPORTANT: To edit or delete an event, you MUST ALWAYS call search_events first to find the exact eventId. Never guess or hallucinate the eventId.
             6. PERMISSION REQUIREMENT: If the user asks you to create, update, delete, send, or modify anything (like creating/moving an event or sending an email), you MUST NOT call the tool immediately. Instead, first reply to the user with a summary of the action you are about to take (e.g. 'I will create a meeting with Abir on July 26 from 4PM to 5PM. Shall I proceed?'). Wait for the user to explicitly say 'yes' or approve before you actually call the tool. For safe read-only actions (like searching events), you may call tools without asking.
-            7. EXECUTION UPDATES: When you finally have permission and decide to call a tool, you MUST include a short plain text message in your response content (e.g. 'Executing: Creating your event...' or 'Checking your calendar...'). This will be sent to the user immediately so they know you are working on it.
-            8. MEMORY & IDs: Because your memory relies on your past responses, you MUST securely memorize exact email addresses and Event IDs for later use. To do this without cluttering the user's text message, wrap all technical IDs at the very end of your response inside a hidden block like this: [HIDDEN: Email: example@gmail.com, EventID: 12345]. This block will be saved to your memory but hidden from the user.
+             7. EXECUTION UPDATES: When you finally have permission and decide to call a tool, you MUST include a short plain text message in your response content (e.g. 'Executing: Creating your event...' or 'Checking your calendar...'). This will be sent to the user immediately so they know you are working on it.
+             8. SEARCHING EMAILS BY SENDER: To find mail from a company, use the search_emails tool with a from: query using the company NAME or a word from it (e.g. 'from:Capital One' or 'from:capitalone'). Gmail matches the sender's display name and address. Do NOT guess full email domains like 'from:capitalone.com' — the real domain often differs and you will get zero results. Only use a full email address in from: if the user gave it to you.
+             9. MEMORY & IDs: Because your memory relies on your past responses, you MUST securely memorize exact email addresses and Event IDs for later use. To do this without cluttering the user's text message, wrap all technical IDs at the very end of your response inside a hidden block like this: [HIDDEN: Email: example@gmail.com, EventID: 12345]. This block will be saved to your memory but hidden from the user.
             
             You have access to Gmail and Google Calendar tools. If the user asks you to check email or schedule something, DO IT using your tools.`
           }
@@ -261,6 +263,27 @@ export async function POST(req: Request) {
                       dangerouslySkipVersionCheck: true,
                     });
                     resultData = actionRes as any;
+
+                    // Sender searches can return 0 when the model guesses a domain
+                    // (e.g. from:capitalone.com) that differs from the real sender.
+                    // Retry with fallback queries (e.g. from:capitalone).
+                    if (mapping.action === "GMAIL_FETCH_EMAILS") {
+                      const mappedParams = mapping.mappedParams as Record<string, unknown>;
+                      const originalQuery = typeof mappedParams.query === "string" ? mappedParams.query : "";
+                      const variants = buildSearchFallbacks(originalQuery);
+                      for (const q of variants.slice(1)) {
+                        const current = (resultData as any)?.data?.messages ?? (resultData as any)?.messages ?? [];
+                        if (current.length > 0) break;
+                        console.log(`Gmail search returned 0 results; retrying with query: "${q}"`);
+                        const retryRes = await composio.tools.execute(mapping.action, {
+                          connectedAccountId: toolkitConnectionId,
+                          arguments: { ...mappedParams, query: q },
+                          userId: "voicemail-user",
+                          dangerouslySkipVersionCheck: true,
+                        });
+                        resultData = retryRes as any;
+                      }
+                    }
                   } catch (apiError: any) {
                     console.log("Composio API error, falling back to mock data...");
                     if (mapping.action === "GMAIL_FETCH_EMAILS") {

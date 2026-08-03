@@ -1,4 +1,5 @@
 import { gmailIntegration } from "./composio"
+import { buildSearchFallbacks } from "./gmail-query"
 import type { DraftReply, ToolResult } from "@/types"
 
 const MAX_EMAILS = 20
@@ -68,25 +69,36 @@ function getTotalEstimate(raw: unknown): number | undefined {
 }
 
 async function fetchEmails(args: Record<string, unknown>): Promise<ToolResult> {
-  try {
-    const raw = await gmailIntegration.executeAction("GMAIL_FETCH_EMAILS", {
-      include_payload: false,
-      ...args,
-    })
-    const emails = compactEmails(raw)
-    const nextPageToken = getNextPageToken(raw)
-    const total = getTotalEstimate(raw)
-    return {
-      success: true,
-      data: {
-        emails,
-        count: emails.length,
-        ...(nextPageToken ? { nextPageToken } : {}),
-        ...(typeof total === "number" ? { total } : {}),
-      },
+  const query = typeof args.query === "string" && args.query.trim() ? args.query : null
+  const variants = query ? buildSearchFallbacks(query) : [null]
+
+  let emails: Record<string, unknown>[] = []
+  let nextPageToken: string | undefined
+  let total: number | undefined
+
+  for (const q of variants) {
+    try {
+      const raw = await gmailIntegration.executeAction("GMAIL_FETCH_EMAILS", {
+        include_payload: false,
+        ...(q !== null ? { ...args, query: q } : args),
+      })
+      emails = compactEmails(raw)
+      nextPageToken = getNextPageToken(raw)
+      total = getTotalEstimate(raw)
+      if (emails.length > 0) break
+    } catch (error) {
+      return { success: false, error: String(error) }
     }
-  } catch (error) {
-    return { success: false, error: String(error) }
+  }
+
+  return {
+    success: true,
+    data: {
+      emails,
+      count: emails.length,
+      ...(nextPageToken ? { nextPageToken } : {}),
+      ...(typeof total === "number" ? { total } : {}),
+    },
   }
 }
 
