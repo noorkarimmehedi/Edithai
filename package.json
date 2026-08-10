@@ -12,6 +12,7 @@
     "@base-ui/react": "^1.6.0",
     "@composio/core": "^0.14.0",
     "@composio/openai": "^0.10.1",
+    "@convex-dev/better-auth": "^0.12.5",
     "@paper-design/shaders": "^0.0.77",
     "better-auth": "^1.6.26",
     "class-variance-authority": "^0.7.1",

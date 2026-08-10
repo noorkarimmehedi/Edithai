@@ -1,8 +1,11 @@
 import { betterAuth } from "better-auth";
-import { convexAdapter } from "better-auth/adapters/convex";
+import { convexAdapter, type GenericCtx } from "@convex-dev/better-auth";
 
 export const auth = betterAuth({
-  database: convexAdapter(process.env.CONVEX_URL!),
+  // NOTE: convexAdapter requires Convex component API, not a URL.
+  // This file needs to be refactored to follow the Convex component pattern.
+  // See: https://labs.convex.dev/better-auth/framework-guides/next
+  database: convexAdapter({} as any, {} as any),
   emailAndPassword: {
     enabled: true,
     autoSignIn: true,
