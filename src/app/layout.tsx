@@ -10,6 +10,8 @@ const pixelifySans = Pixelify_Sans({
 import { ThemeProvider } from "@/components/layout/theme-provider"
 import { Navbar } from "@/components/ui/mini-navbar"
 import { Toaster } from "@/components/ui/sonner"
+import { ConvexClientProvider } from "../../components/ConvexClientProvider"
+import { getToken } from "@/lib/auth-server"
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,11 +30,13 @@ export const metadata: Metadata = {
 
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const token = await getToken();
+
   return (
     <html
       lang="en"
@@ -46,8 +50,10 @@ export default function RootLayout({
           enableSystem={false}
           disableTransitionOnChange
         >
-          <Navbar />
-          <main className="flex flex-1 flex-col">{children}</main>
+          <ConvexClientProvider initialToken={token}>
+            <Navbar />
+            <main className="flex flex-1 flex-col">{children}</main>
+          </ConvexClientProvider>
           <Toaster />
         </ThemeProvider>
       </body>
