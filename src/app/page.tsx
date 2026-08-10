@@ -17,7 +17,7 @@ export default function Home() {
           title="Your AI-Powered"
           titleLine2="Voice Assistant Edith"
           description="Manage your emails, calendar, and tasks with natural voice conversations."
-          washImage="https://images.unsplash.com/photo-1578301978018-3005759f48f7?q=80&w=1144&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
+          washImage="/hero-03.JPG"
           animation="subtle"
           primaryCTA={{
             ctaEnabled: true,
