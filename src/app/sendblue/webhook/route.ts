@@ -330,8 +330,8 @@ export async function POST(req: Request) {
         console.log("Sending reply back via Sendblue:", userFacingText);
         
         Promise.all([
-          convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "assistant", content: finalReplyText }).catch(err => console.error("Convex error:", err)),
-          sendBlueMessage(senderNumber, userFacingText).catch(err => console.error("Sendblue error:", err))
+          convex.mutation(api.users.addMessage, { phoneNumber: senderNumber, role: "assistant", content: finalReplyText }).catch((err: unknown) => console.error("Convex error:", err)),
+          sendBlueMessage(senderNumber, userFacingText).catch((err: unknown) => console.error("Sendblue error:", err))
         ]);
       } catch (err) {
         console.error("Background processing error:", err);
